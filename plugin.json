@@ -1,0 +1,11 @@
+{
+  "name": "Museum Quiz",
+  "version": "1.0.0",
+  "contactEmailAddress": "plugins@j3.gg",
+  "description": "Pulses a text-fitted outline around the correct Varrock Museum natural history quiz answer. Checks for the quiz only while in the museum.",
+  "requiredDependencies": {},
+  "optionalDependencies": {},
+  "requiredPermissions": [],
+  "optionalPermissions": [],
+  "urls": {}
+}
