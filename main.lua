@@ -1,11 +1,13 @@
 local Answers = require("answers")
 
 local EVENT_ID = "museum_quiz_answer_outline"
+local READY_TICKS = 30
 local POLL_INTERVAL = 5
 local PULSE_PERIOD = 1.2
 local TEXT_PADDING = 3
 
 local QUESTION_COMPONENT = "VM_NATURAL_HISTORY__VM_NATHIS_QUESTION"
+local HOST_COMPONENT = "TOPLEVEL_V2__MODAL_WINDOW_CONTENT"
 local ANSWER_COMPONENTS = {
     "VM_NATURAL_HISTORY__VM_NATHIS_ANSWER_01",
     "VM_NATURAL_HISTORY__VM_NATHIS_ANSWER_02",
@@ -17,6 +19,8 @@ local outline = nil
 local pulseTime = 0
 local activeInterface = nil
 local textMetrics = nil
+local readyTicksLeft = 0
+local onLogic
 
 local function getLabel(componentName)
     local componentID = id.Component[componentName]
@@ -50,6 +54,7 @@ local function clearOutline(interfaceLoaded)
         return
     end
 
+    Event.Logic.Unsubscribe(EVENT_ID)
     if interfaceLoaded then
         outline:Destroy()
     end
@@ -134,6 +139,7 @@ local function showOutline(answer, componentID)
         return
     end
     outline:MoveToFront()
+    Event.Logic.Subscribe(EVENT_ID, onLogic)
     pulseTime = 0
 end
 
@@ -167,49 +173,97 @@ local function updateOutline()
     clearOutline(true)
 end
 
-local onLogic
+local subscribedHost = nil
 
-local function onServerLogic()
-    if not inMuseumMap() then
+local function attachHostHook()
+    local hostID = id.Component[HOST_COMPONENT]
+    local host = hostID ~= nil and ui.Interfaces:GetComponent(hostID) or nil
+    if host == subscribedHost then
         return
     end
 
-    Event.ServerLogic.Unsubscribe(EVENT_ID)
-    Event.Logic.Subscribe(EVENT_ID, onLogic)
-    updateOutline()
+    -- Listeners on an unloaded host are removed with its interface.
+    subscribedHost = host
+    if host ~= nil then
+        host:Subscribe(ui.Hook.ONSUBCHANGE, EVENT_ID, function()
+            if inMuseumMap() then
+                updateOutline()
+                if outline == nil then
+                    if readyTicksLeft == 0 then
+                        Event.Logic.Subscribe(EVENT_ID, onLogic)
+                    end
+                    readyTicksLeft = READY_TICKS
+                else
+                    readyTicksLeft = 0
+                end
+            end
+            return true
+        end)
+    end
 end
 
-onLogic = function(event)
-    if event.logicTick % POLL_INTERVAL ~= 0 then
-        return
-    end
-
+local function onServerLogic()
+    attachHostHook()
     if not inMuseumMap() then
+        if readyTicksLeft > 0 then
+            readyTicksLeft = 0
+            Event.Logic.Unsubscribe(EVENT_ID)
+        end
         if outline ~= nil then
             clearOutline(getLabel(QUESTION_COMPONENT) ~= nil)
         end
         activeInterface = nil
-        Event.Logic.Unsubscribe(EVENT_ID)
-        Event.ServerLogic.Subscribe(EVENT_ID, onServerLogic)
         return
     end
 
     updateOutline()
+    if outline ~= nil then
+        readyTicksLeft = 0
+    end
+end
+
+onLogic = function(event)
+    if readyTicksLeft > 0 then
+        if not inMuseumMap() then
+            onServerLogic()
+            return
+        end
+
+        readyTicksLeft = readyTicksLeft - 1
+        updateOutline()
+        if outline == nil then
+            if readyTicksLeft == 0 then
+                Event.Logic.Unsubscribe(EVENT_ID)
+            end
+            return
+        end
+        readyTicksLeft = 0
+    end
+
+    if event.logicTick % POLL_INTERVAL ~= 0 then
+        return
+    end
+
+    onServerLogic()
     if outline ~= nil then
         pulseTime = (pulseTime + POLL_INTERVAL / 50) % PULSE_PERIOD
         outline.alpha = 0.65 + 0.35 * math.sin(pulseTime * (2 * math.pi / PULSE_PERIOD))
     end
 end
 
-if inMuseumMap() then
-    Event.Logic.Subscribe(EVENT_ID, onLogic)
-    updateOutline()
-else
-    Event.ServerLogic.Subscribe(EVENT_ID, onServerLogic)
-end
+Event.ServerLogic.Subscribe(EVENT_ID, onServerLogic)
+onServerLogic()
 
 function PluginShutdown()
-    Event.Logic.Unsubscribe(EVENT_ID)
+    local hostID = id.Component[HOST_COMPONENT]
+    if hostID ~= nil and subscribedHost ~= nil
+        and ui.Interfaces:GetComponent(hostID) == subscribedHost
+    then
+        subscribedHost:Unsubscribe(ui.Hook.ONSUBCHANGE, EVENT_ID)
+    end
     Event.ServerLogic.Unsubscribe(EVENT_ID)
+    if readyTicksLeft > 0 then
+        Event.Logic.Unsubscribe(EVENT_ID)
+    end
     clearOutline(getLabel(QUESTION_COMPONENT) ~= nil)
 end
